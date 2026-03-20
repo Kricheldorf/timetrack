@@ -2,6 +2,14 @@
 # scripts/scripts/track
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${TIMETRACK_ENV_FILE:-$SCRIPT_DIR/.env}"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+fi
+
 DATA_DIR="${TIMETRACK_DATA_DIR:-$HOME/.local/share/timetrack}"
 TIMECLOCK_FILE="$DATA_DIR/time.timeclock"
 CACHE_FILE="$DATA_DIR/ticket-cache.json"
@@ -165,7 +173,7 @@ validate_jira_env() {
   done
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo "Error: Missing required env var(s): ${missing[*]}" >&2
-    echo "Set these in your fish config." >&2
+    echo "Set these in .env (see .env.example) or as environment variables." >&2
     exit 1
   fi
 }
