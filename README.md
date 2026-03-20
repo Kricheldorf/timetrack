@@ -1,5 +1,7 @@
 # timetrack
 
+Built vibing with [Claude Code](https://claude.ai/code/family)
+
 A CLI time tracker that logs work sessions to an [hledger](https://hledger.org/) timeclock file, with Jira integration for automatic client/project metadata.
 
 ## How it works
@@ -8,10 +10,10 @@ Each Jira ticket maps to an hledger account in the format `Client:Project:TICKET
 
 ## Dependencies
 
-- [hledger](https://hledger.org/)
+- [hledger](https://hledger.org/) - Motive: I already use it for personal financial tracking
 - [jq](https://jqlang.github.io/jq/)
 - [curl](https://curl.se/)
-- bash 4+
+- bash 4+ - Motive: Just for fun and getting more familiar with bash scripting
 
 ## Setup
 
