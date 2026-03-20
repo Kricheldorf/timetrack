@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# scripts/scripts/track
+set -euo pipefail
+
+DATA_DIR="${TIMETRACK_DATA_DIR:-$HOME/.local/share/timetrack}"
+TIMECLOCK_FILE="$DATA_DIR/time.timeclock"
+CACHE_FILE="$DATA_DIR/ticket-cache.json"
+
+check_deps() {
+  for cmd in hledger jq curl; do
+    if ! command -v "$cmd" &>/dev/null; then
+      echo "Error: '$cmd' is required but not installed." >&2
+      exit 1
+    fi
+  done
+}
+
+init_data_dir() {
+  mkdir -p "$DATA_DIR"
+  [[ -f "$TIMECLOCK_FILE" ]] || touch "$TIMECLOCK_FILE"
+  [[ -f "$CACHE_FILE" ]] || echo '{}' > "$CACHE_FILE"
+}
+
+usage() {
+  cat >&2 <<EOF
+Usage: track <command>
+
+Commands:
+  track TICKET-123          Start tracking a ticket (e.g. SHIP-123)
+  track stop                Stop current session
+  track status              Show current ticket and elapsed time
+  track report [YYYY-MM-DD] Show hledger report for today or a given date
+  track edit                Open timeclock file in \$EDITOR
+  track refresh TICKET-123  Re-fetch Jira metadata for a ticket
+  track fields  TICKET-123  List Jira field names/IDs for a ticket
+EOF
+}
+
+# Returns the account name of the open session, or empty string if none.
+# An open session is when the last non-empty line starts with "i".
+get_open_session() {
+  local last_line
+  last_line=$(grep -v '^$' "$TIMECLOCK_FILE" | tail -1)
+  if [[ "$last_line" == i\ * ]]; then
+    echo "$last_line" | awk '{for(i=4;i<=NF;i++) printf "%s%s",$i,(i<NF?OFS:""); print ""}'
+  fi
+}
+
+# Appends a clock-in line: "i YYYY-MM-DD HH:MM:SS account"
+clock_in() {
+  local account="$1" ts="$2"
+  local date_part="${ts%T*}"
+  local time_part="${ts#*T}"
+  echo "i $date_part $time_part $account" >> "$TIMECLOCK_FILE"
+}
+
+# Appends a clock-out line, or removes the last i line if zero-duration.
+clock_out() {
+  local ts="$1"
+  local date_part="${ts%T*}"
+  local time_part="${ts#*T}"
+
+  local last_line
+  last_line=$(grep -v '^$' "$TIMECLOCK_FILE" | tail -1)
+  local open_ts
+  open_ts=$(echo "$last_line" | awk '{print $2"T"$3}')
+
+  if [[ "$open_ts" == "$ts" ]]; then
+    # Zero duration — remove the last line
+    local tmp
+    tmp=$(mktemp)
+    head -n -1 "$TIMECLOCK_FILE" > "$tmp"
+    mv "$tmp" "$TIMECLOCK_FILE"
+  else
+    echo "o $date_part $time_part" >> "$TIMECLOCK_FILE"
+  fi
+}
+
+main() {
+  check_deps
+  init_data_dir
+
+  local cmd="${1:-}"
+  case "$cmd" in
+    stop)    cmd_stop ;;
+    status)  cmd_status ;;
+    report)  cmd_report "${2:-}" ;;
+    edit)    cmd_edit ;;
+    refresh) cmd_refresh "${2:-}" ;;
+    fields)  cmd_fields "${2:-}" ;;
+    "")      usage; exit 1 ;;
+    *)
+      if [[ "$cmd" =~ ^[A-Z]+-[0-9]+$ ]]; then
+        cmd_start "$cmd"
+      else
+        usage; exit 1
+      fi
+      ;;
+  esac
+}
+
+cmd_stop() {
+  local open
+  open=$(get_open_session)
+  if [[ -z "$open" ]]; then
+    echo "No active session."
+    return 0
+  fi
+  clock_out "$(date "+%Y-%m-%dT%H:%M:%S")"
+  local ticket="${open##*:}"
+  echo "Stopped: $ticket"
+}
+
+cmd_status() {
+  local open
+  open=$(get_open_session)
+  if [[ -z "$open" ]]; then
+    echo "No active session."
+    return 0
+  fi
+
+  local ticket="${open##*:}"
+  local last_line
+  last_line=$(grep -v '^$' "$TIMECLOCK_FILE" | tail -1)
+  local open_date open_time
+  read -r open_date open_time <<< "$(echo "$last_line" | awk '{print $2, $3}')"
+
+  local start_epoch now elapsed_secs elapsed_h elapsed_m
+  start_epoch=$(date -d "${open_date} ${open_time}" "+%s")
+  now=$(date "+%s")
+  elapsed_secs=$(( now - start_epoch ))
+  elapsed_h=$(( elapsed_secs / 3600 ))
+  elapsed_m=$(( (elapsed_secs % 3600) / 60 ))
+
+  if [[ $elapsed_h -gt 0 ]]; then
+    echo "$ticket (${elapsed_h}h ${elapsed_m}m)"
+  else
+    echo "$ticket (${elapsed_m}m)"
+  fi
+}
+validate_jira_env() {
+  local missing=()
+  for var in JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN JIRA_CLIENT_FIELD JIRA_PROJECT_FIELD; do
+    if [[ -z "${!var:-}" ]]; then
+      missing+=("$var")
+    fi
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Error: Missing required env var(s): ${missing[*]}" >&2
+    echo "Set these in your fish config." >&2
+    exit 1
+  fi
+}
+
+fetch_from_jira() {
+  local ticket="$1"
+  local auth
+  auth=$(echo -n "$JIRA_EMAIL:$JIRA_API_TOKEN" | base64 -w0)
+
+  local http_code body tmp_response
+  tmp_response=$(mktemp)
+  http_code=$(curl -s -o "$tmp_response" -w "%{http_code}" \
+    -H "Authorization: Basic $auth" \
+    -H "Accept: application/json" \
+    "$JIRA_BASE_URL/rest/api/3/issue/$ticket") || {
+    rm -f "$tmp_response"
+    echo "Error: curl failed for $ticket" >&2; exit 1
+  }
+  body=$(< "$tmp_response")
+  rm -f "$tmp_response"
+
+  if [[ "$http_code" == "404" ]]; then
+    echo "Error: Ticket $ticket not found in Jira." >&2; exit 1
+  elif [[ "$http_code" != "2"* ]]; then
+    echo "Error: Jira API returned HTTP $http_code for $ticket." >&2; exit 1
+  fi
+
+  local client project
+  client=$(echo "$body" | jq -r \
+    --arg f "$JIRA_CLIENT_FIELD" \
+    '.fields[$f] | if type == "array" then .[0].value // .[0].name elif type == "object" then .value // .name else . end // empty')
+  project=$(echo "$body" | jq -r \
+    --arg f "$JIRA_PROJECT_FIELD" \
+    '.fields[$f] | if type == "array" then .[0].value // .[0].name elif type == "object" then .value // .name else . end // empty')
+
+  if [[ -z "$client" ]]; then
+    echo "Error: field JIRA_CLIENT_FIELD ($JIRA_CLIENT_FIELD) returned null for $ticket. Check your env var values." >&2; exit 1
+  fi
+  if [[ -z "$project" ]]; then
+    echo "Error: field JIRA_PROJECT_FIELD ($JIRA_PROJECT_FIELD) returned null for $ticket. Check your env var values." >&2; exit 1
+  fi
+
+  jq -cn --arg client "$client" --arg project "$project" '{client: $client, project: $project}'
+}
+
+get_ticket_info() {
+  local ticket="$1"
+  local cached
+  cached=$(jq -c --arg t "$ticket" '.[$t] // empty' "$CACHE_FILE")
+
+  if [[ -n "$cached" ]]; then
+    echo "$cached"; return 0
+  fi
+
+  validate_jira_env
+  local info
+  info=$(fetch_from_jira "$ticket")
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg t "$ticket" --argjson info "$info" '.[$t] = $info' "$CACHE_FILE" > "$tmp"
+  mv "$tmp" "$CACHE_FILE"
+
+  echo "$info"
+}
+
+cmd_start() {
+  local ticket="$1"
+
+  # Fetch ticket info BEFORE touching the timeclock file so a Jira failure
+  # cannot leave the user with no active session.
+  local info
+  info=$(get_ticket_info "$ticket")
+  [[ -z "$info" ]] && { echo "Error: ticket '$ticket' not found in cache. Run after Jira env vars are set." >&2; exit 1; }
+  local client project
+  read -r client project < <(echo "$info" | jq -r '[.client, .project] | @tsv')
+
+  local now
+  now=$(date "+%Y-%m-%dT%H:%M:%S")
+
+  local open
+  open=$(get_open_session)
+  if [[ -n "$open" ]]; then
+    local prev_ticket="${open##*:}"
+    clock_out "$now"
+    echo "Stopped: $prev_ticket"
+  fi
+
+  clock_in "$client:$project:$ticket" "$now"
+  echo "Tracking: $ticket"
+}
+cmd_report() {
+  local date_arg="${1:-$(date "+%Y-%m-%d")}"
+  hledger -f "$TIMECLOCK_FILE" register --period "$date_arg"
+}
+
+cmd_edit() {
+  "${EDITOR:-vi}" "$TIMECLOCK_FILE"
+}
+cmd_refresh() {
+  local ticket="${1:-}"
+  if [[ -z "$ticket" ]]; then
+    echo "Usage: track refresh TICKET-123" >&2; exit 1
+  fi
+  if [[ ! "$ticket" =~ ^[A-Z]+-[0-9]+$ ]]; then
+    echo "Error: Invalid ticket format '$ticket'. Expected format: PROJ-123" >&2; exit 1
+  fi
+  validate_jira_env
+
+  local info
+  if ! info=$(fetch_from_jira "$ticket"); then
+    exit 1
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg t "$ticket" --argjson info "$info" '.[$t] = $info' "$CACHE_FILE" > "$tmp"
+  mv "$tmp" "$CACHE_FILE"
+  echo "Refreshed: $ticket"
+}
+
+cmd_fields() {
+  local ticket="${1:-}"
+  if [[ -z "$ticket" ]]; then
+    echo "Usage: track fields TICKET-123" >&2; exit 1
+  fi
+  # validate_jira_env
+  local auth
+  auth=$(echo -n "$JIRA_EMAIL:$JIRA_API_TOKEN" | base64 -w0)
+
+  local http_code body tmp_response
+  tmp_response=$(mktemp)
+  http_code=$(curl -s -o "$tmp_response" -w "%{http_code}" \
+    -H "Authorization: Basic $auth" \
+    -H "Accept: application/json" \
+    "$JIRA_BASE_URL/rest/api/3/issue/$ticket?expand=names") || {
+    rm -f "$tmp_response"
+    echo "Error: curl failed for $ticket" >&2; exit 1
+  }
+  body=$(< "$tmp_response")
+  rm -f "$tmp_response"
+
+  if [[ "$http_code" != "2"* ]]; then
+    echo "Error: HTTP $http_code" >&2; exit 1
+  fi
+
+  echo "$body" | jq -r '.names | to_entries[] | "\(.key)\t\(.value)"' | sort | column -t -s $'\t'
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
