@@ -4,7 +4,7 @@
 setup() {
   export TIMETRACK_DATA_DIR="$(mktemp -d)"
   export CACHE_FILE="$TIMETRACK_DATA_DIR/ticket-cache.json"
-  TRACK="$BATS_TEST_DIRNAME/../scripts/track"
+  TRACK="$BATS_TEST_DIRNAME/../bin/track"
 }
 
 teardown() {
@@ -32,7 +32,7 @@ teardown() {
 }
 
 load_track() {
-  source "$BATS_TEST_DIRNAME/../scripts/track"
+  source "$BATS_TEST_DIRNAME/../bin/track"
   init_data_dir  # files aren't created when sourcing (only when executing)
 }
 
@@ -127,6 +127,74 @@ load_track() {
 @test "invalid ticket format exits 1" {
   run bash "$TRACK" not-a-ticket
   [ "$status" -eq 1 ]
+}
+
+@test "ticket_from_branch extracts SA ticket from branch" {
+  load_track
+  git() { echo "SA-1440-task-description"; }
+  export -f git
+  result=$(ticket_from_branch)
+  [ "$result" = "SA-1440" ]
+}
+
+@test "ticket_from_branch extracts ticket from feat/ prefix branch" {
+  load_track
+  git() { echo "feat/SA-1440-task-description"; }
+  export -f git
+  result=$(ticket_from_branch)
+  [ "$result" = "SA-1440" ]
+}
+
+@test "ticket_from_branch extracts lowercase sa ticket and uppercases it" {
+  load_track
+  git() { echo "sa-1440-task-description"; }
+  export -f git
+  result=$(ticket_from_branch)
+  [ "$result" = "SA-1440" ]
+}
+
+@test "ticket_from_branch extracts QDX ticket" {
+  load_track
+  git() { echo "qdx-99-some-feature"; }
+  export -f git
+  result=$(ticket_from_branch)
+  [ "$result" = "QDX-99" ]
+}
+
+@test "ticket_from_branch returns empty for branch without ticket" {
+  load_track
+  git() { echo "main"; }
+  export -f git
+  result=$(ticket_from_branch)
+  [ -z "$result" ]
+}
+
+@test "no args with ticket branch starts tracking" {
+  echo '{"SA-1440":{"client":"ClientX","project":"ProjectY"}}' > "$CACHE_FILE"
+
+  local mock_dir
+  mock_dir="$(mktemp -d)"
+  cat > "$mock_dir/git" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$1" == "rev-parse" ]]; then
+  echo "feat/SA-1440-task-description"
+else
+  command git "$@"
+fi
+MOCK
+  chmod +x "$mock_dir/git"
+
+  PATH="$mock_dir:$PATH" run bash "$TRACK"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Tracking: SA-1440"* ]]
+  rm -rf "$mock_dir"
+}
+
+@test "lowercase ticket arg is uppercased" {
+  echo '{"SA-1440":{"client":"ClientX","project":"ProjectY"}}' > "$CACHE_FILE"
+  run bash "$TRACK" sa-1440
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Tracking: SA-1440"* ]]
 }
 
 @test "validate_jira_env fails with missing var named in message" {

@@ -76,6 +76,16 @@ clock_out() {
   fi
 }
 
+ticket_from_branch() {
+  local branch
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || return 1
+  local ticket
+  if [[ "$branch" =~ (^|/)(([Ss][Aa]|[Qq][Dd][Xx])-[0-9]+) ]]; then
+    ticket="${BASH_REMATCH[2]^^}"
+    echo "$ticket"
+  fi
+}
+
 main() {
   check_deps
   init_data_dir
@@ -88,10 +98,18 @@ main() {
     edit)    cmd_edit ;;
     refresh) cmd_refresh "${2:-}" ;;
     fields)  cmd_fields "${2:-}" ;;
-    "")      usage; exit 1 ;;
+    "")
+      local ticket
+      ticket=$(ticket_from_branch)
+      if [[ -n "$ticket" ]]; then
+        cmd_start "$ticket"
+      else
+        usage; exit 1
+      fi
+      ;;
     *)
-      if [[ "$cmd" =~ ^[A-Z]+-[0-9]+$ ]]; then
-        cmd_start "$cmd"
+      if [[ "$cmd" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
+        cmd_start "${cmd^^}"
       else
         usage; exit 1
       fi
