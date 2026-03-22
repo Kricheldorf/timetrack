@@ -47,11 +47,38 @@ track report 2026-03-19 # Show hledger report for a specific date
 track edit              # Open timeclock file in $EDITOR
 track refresh SHIP-123  # Re-fetch Jira metadata for a ticket
 track fields SHIP-123   # List Jira field names/IDs for a ticket
+track shipix            # Start tracking using an alias (see Aliases below)
+track completions fish  # Output fish shell completions to stdout
+track completions zsh   # Output zsh shell completions to stdout
 ```
 
 Running `track` with no arguments extracts a ticket ID from the current git branch name (supports `SA-*` and `QDX-*` prefixes).
 
-Starting a new ticket automatically stops any currently running session.
+Starting a new ticket or alias automatically stops any currently running session.
+
+## Aliases
+
+Aliases let you quickly start tracking for known client/project combos without a Jira ticket (e.g. for meetings). Define them in `.env` via `TRACK_ALIASES`, semicolon-separated:
+
+```bash
+TRACK_ALIASES="shipix=Shipix:General;quicargo=Quicargo:Maintenance;action=IDL Action:MVP 1"
+```
+
+Then run `track shipix` to clock in as `Shipix:General:shipix`.
+
+## Shell Completions
+
+Generate completion scripts with `track completions`:
+
+```sh
+# Fish
+track completions fish > ~/.config/fish/completions/track.fish
+
+# Zsh
+track completions zsh > "${fpath[1]}/_track"
+```
+
+Completions include all subcommands plus any configured aliases.
 
 ## Data
 

@@ -35,12 +35,14 @@ Usage: track <command>
 
 Commands:
   track TICKET-123          Start tracking a ticket (e.g. SHIP-123)
+  track <alias>             Start tracking using a configured alias
   track stop                Stop current session
   track status              Show current ticket and elapsed time
   track report [YYYY-MM-DD] Show hledger report for today or a given date
   track edit                Open timeclock file in \$EDITOR
   track refresh TICKET-123  Re-fetch Jira metadata for a ticket
   track fields  TICKET-123  List Jira field names/IDs for a ticket
+  track completions <shell> Output shell completions (fish, zsh)
 EOF
 }
 
@@ -94,6 +96,81 @@ ticket_from_branch() {
   fi
 }
 
+resolve_alias() {
+  local name="$1"
+  local aliases="${TRACK_ALIASES:-}"
+  [[ -z "$aliases" ]] && return 0
+
+  local IFS=';'
+  for entry in $aliases; do
+    local key="${entry%%=*}"
+    local val="${entry#*=}"
+    if [[ "$key" == "$name" ]]; then
+      echo "$val"
+      return 0
+    fi
+  done
+}
+
+cmd_alias_start() {
+  local alias_name="$1"
+  local client_project
+  client_project=$(resolve_alias "$alias_name")
+
+  local now
+  now=$(date "+%Y-%m-%dT%H:%M:%S")
+
+  local open
+  open=$(get_open_session)
+  if [[ -n "$open" ]]; then
+    local prev="${open##*:}"
+    clock_out "$now"
+    echo "Stopped: $prev"
+  fi
+
+  clock_in "$client_project:$alias_name" "$now"
+  echo "Tracking: $alias_name"
+}
+
+get_alias_names() {
+  local aliases="${TRACK_ALIASES:-}"
+  [[ -z "$aliases" ]] && return 0
+  local IFS=';'
+  for entry in $aliases; do
+    echo "${entry%%=*}"
+  done
+}
+
+cmd_completions() {
+  local shell="${1:-}"
+  local subcommands="stop status report edit refresh fields completions"
+  local alias_names
+  alias_names=$(get_alias_names | tr '\n' ' ')
+
+  case "$shell" in
+    fish)
+      cat <<EOF
+set -l subcommands $subcommands
+set -l aliases $alias_names
+complete -c track -f
+complete -c track -n "not __fish_seen_subcommand_from \$subcommands \$aliases" -a "\$subcommands \$aliases"
+EOF
+      ;;
+    zsh)
+      local all_commands="$subcommands $alias_names"
+      cat <<EOF
+#compdef track
+_track() {
+  local -a commands
+  commands=($all_commands)
+  _describe 'command' commands
+}
+_track
+EOF
+      ;;
+  esac
+}
+
 main() {
   check_deps
   init_data_dir
@@ -106,6 +183,7 @@ main() {
     edit)    cmd_edit ;;
     refresh) cmd_refresh "${2:-}" ;;
     fields)  cmd_fields "${2:-}" ;;
+    completions) cmd_completions "${2:-}" ;;
     "")
       local ticket
       ticket=$(ticket_from_branch)
@@ -119,7 +197,13 @@ main() {
       if [[ "$cmd" =~ ^[A-Za-z]+-[0-9]+$ ]]; then
         cmd_start "${cmd^^}"
       else
-        usage; exit 1
+        local alias_val
+        alias_val=$(resolve_alias "$cmd")
+        if [[ -n "$alias_val" ]]; then
+          cmd_alias_start "$cmd"
+        else
+          usage; exit 1
+        fi
       fi
       ;;
   esac

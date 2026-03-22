@@ -5,6 +5,7 @@ setup() {
   export TIMETRACK_DATA_DIR="$(mktemp -d)"
   export CACHE_FILE="$TIMETRACK_DATA_DIR/ticket-cache.json"
   TRACK="$BATS_TEST_DIRNAME/../bin/track"
+  export TIMETRACK_ENV_FILE="/dev/null"
 }
 
 teardown() {
@@ -293,6 +294,102 @@ MOCK
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+## Alias tests
+
+@test "track alias starts session with three-segment account" {
+  load_track
+  export TRACK_ALIASES="shipix=Shipix:General;quicargo=Quicargo:Maintenance"
+  run bash "$TRACK" shipix
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Tracking: shipix"* ]]
+  open=$(get_open_session)
+  [ "$open" = "Shipix:General:shipix" ]
+}
+
+@test "track alias stops previous session before starting" {
+  load_track
+  export TRACK_ALIASES="shipix=Shipix:General;quicargo=Quicargo:Maintenance"
+  clock_in "Shipix:General:shipix" "2026-03-19T09:00:00"
+  run bash "$TRACK" quicargo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Stopped: shipix"* ]]
+  [[ "$output" == *"Tracking: quicargo"* ]]
+  open=$(get_open_session)
+  [ "$open" = "Quicargo:Maintenance:quicargo" ]
+}
+
+@test "track unknown alias exits 1" {
+  export TRACK_ALIASES="shipix=Shipix:General"
+  run bash "$TRACK" notanalias
+  [ "$status" -eq 1 ]
+}
+
+@test "resolve_alias returns correct value" {
+  load_track
+  export TRACK_ALIASES="shipix=Shipix:General;action=IDL Action:MVP 1"
+  result=$(resolve_alias "action")
+  [ "$result" = "IDL Action:MVP 1" ]
+}
+
+@test "resolve_alias returns empty for unknown alias" {
+  load_track
+  export TRACK_ALIASES="shipix=Shipix:General"
+  result=$(resolve_alias "nope")
+  [ -z "$result" ]
+}
+
+@test "track status shows alias name for alias-based session" {
+  load_track
+  local start
+  start=$(date -d "5 minutes ago" "+%Y-%m-%dT%H:%M:%S")
+  clock_in "Shipix:General:shipix" "$start"
+  run bash "$TRACK" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == "shipix ("*")"* ]]
+}
+
+@test "track stop shows alias name for alias-based session" {
+  load_track
+  clock_in "Shipix:General:shipix" "2026-03-19T09:00:00"
+  run bash "$TRACK" stop
+  [ "$status" -eq 0 ]
+  [ "$output" = "Stopped: shipix" ]
+}
+
+## Completions tests
+
+@test "track completions fish outputs valid fish script" {
+  export TRACK_ALIASES="shipix=Shipix:General;quicargo=Quicargo:Maintenance"
+  run bash "$TRACK" completions fish
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"complete -c track"* ]]
+  [[ "$output" == *"shipix"* ]]
+  [[ "$output" == *"quicargo"* ]]
+}
+
+@test "track completions zsh outputs valid zsh script" {
+  export TRACK_ALIASES="shipix=Shipix:General;quicargo=Quicargo:Maintenance"
+  run bash "$TRACK" completions zsh
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#compdef track"* ]]
+  [[ "$output" == *"shipix"* ]]
+  [[ "$output" == *"quicargo"* ]]
+}
+
+@test "track completions with unknown shell is a no-op" {
+  run bash "$TRACK" completions powershell
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "track completions with no arg is a no-op" {
+  run bash "$TRACK" completions
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+## Edit tests
 
 @test "track edit opens timeclock file with EDITOR" {
   local mock_dir called_with
