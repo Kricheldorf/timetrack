@@ -429,3 +429,126 @@ MOCK
   result=$(resolve_project_map "Shipix:General")
   [ -z "$result" ]
 }
+
+## CSV export tests
+
+@test "track csv outputs header and rows for completed sessions" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  echo "i 2026-03-19 11:00:00 Shipix:General:SHIP-456" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 12:00:00" >> "$TIMECLOCK_FILE"
+  export TRACK_CSV_DESCRIPTION="Coding and PR/Docs review"
+  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  local header
+  header=$(echo "$output" | head -1)
+  [ "$header" = '"date","start_time","end_time","project","description"' ]
+  local row1
+  row1=$(echo "$output" | sed -n '2p')
+  [ "$row1" = '"2026-03-19","09:00:00","10:30:00","Shipix - General","Coding and PR/Docs review"' ]
+  local row2
+  row2=$(echo "$output" | sed -n '3p')
+  [ "$row2" = '"2026-03-19","11:00:00","12:00:00","Shipix - General","Coding and PR/Docs review"' ]
+}
+
+@test "track csv skips entries already exported via .latest" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  echo "i 2026-03-19 11:00:00 Shipix:General:SHIP-456" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 12:00:00" >> "$TIMECLOCK_FILE"
+  echo "2026-03-19T10:30:00" > "$TIMETRACK_DATA_DIR/.latest"
+  export TRACK_CSV_DESCRIPTION="Working"
+  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  local lines
+  lines=$(echo "$output" | wc -l)
+  [ "$lines" -eq 2 ]
+  [[ "$output" == *"11:00:00"* ]]
+}
+
+@test "track csv updates .latest after export" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  export TRACK_CSV_DESCRIPTION="Working"
+  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  [ -f "$TIMETRACK_DATA_DIR/.latest" ]
+  [ "$(cat "$TIMETRACK_DATA_DIR/.latest")" = "2026-03-19T10:30:00" ]
+}
+
+@test "track csv with .latest equal to last entry shows no new entries" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  echo "2026-03-19T10:30:00" > "$TIMETRACK_DATA_DIR/.latest"
+  export TRACK_CSV_DESCRIPTION="Working"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  # stdout should have no CSV rows (only stderr message)
+  [[ "$output" == *"No new entries since last export."* ]]
+}
+
+@test "track csv resolves project names via TRACK_PROJECT_MAP" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  export TRACK_CSV_DESCRIPTION="Working"
+  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"Shipix - General"'* ]]
+}
+
+@test "track csv warns and uses raw name for unmapped project" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Unknown:Project:TICK-1" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  export TRACK_CSV_DESCRIPTION="Working"
+  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"Unknown:Project"'* ]]
+}
+
+@test "track csv skips open session with warning" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  echo "i 2026-03-19 11:00:00 Shipix:General:SHIP-456" >> "$TIMECLOCK_FILE"
+  export TRACK_CSV_DESCRIPTION="Working"
+  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  # Should have header + 1 data row (the completed session)
+  local stdout_lines
+  stdout_lines=$(echo "$output" | grep -c '^"')
+  [ "$stdout_lines" -eq 2 ]
+}
+
+@test "track csv on empty timeclock shows no new entries" {
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No new entries since last export."* ]]
+}
+
+@test "track csv detects malformed timeclock with unpaired entry" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
+  echo "i 2026-03-19 10:00:00 Shipix:General:SHIP-456" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 11:00:00" >> "$TIMECLOCK_FILE"
+  run bash "$TRACK" csv
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"malformed timeclock"* ]]
+}
+
+@test "track completions fish includes csv" {
+  run bash "$TRACK" completions fish
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"csv"* ]]
+}

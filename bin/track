@@ -13,6 +13,7 @@ fi
 DATA_DIR="${TIMETRACK_DATA_DIR:-$HOME/.local/share/timetrack}"
 TIMECLOCK_FILE="$DATA_DIR/time.timeclock"
 CACHE_FILE="$DATA_DIR/ticket-cache.json"
+LATEST_FILE="$DATA_DIR/.latest"
 
 check_deps() {
   for cmd in hledger jq curl; do
@@ -42,6 +43,7 @@ Commands:
   track edit                Open timeclock file in \$EDITOR
   track refresh TICKET-123  Re-fetch Jira metadata for a ticket
   track fields  TICKET-123  List Jira field names/IDs for a ticket
+  track csv                 Export sessions as CSV for TeamTrace import
   track completions <shell> Output shell completions (fish, zsh)
 EOF
 }
@@ -159,7 +161,7 @@ get_alias_names() {
 
 cmd_completions() {
   local shell="${1:-}"
-  local subcommands="stop status report edit refresh fields completions"
+  local subcommands="stop status report edit refresh fields completions csv"
   local alias_names
   alias_names=$(get_alias_names | tr '\n' ' ')
 
@@ -187,6 +189,102 @@ EOF
   esac
 }
 
+# TODO: Break exported times that spans from one day to the other into 2 separate entries, one for each day
+cmd_csv() {
+  local latest=""
+  if [[ -f "$LATEST_FILE" ]]; then
+    latest=$(< "$LATEST_FILE")
+  fi
+
+  local description="${TRACK_CSV_DESCRIPTION:-}"
+  local has_rows=false
+  local max_out_ts=""
+  local in_date="" in_time="" account=""
+  local line_num=0
+  local in_state=false
+  local in_line_num=0
+  local warned_projects=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_num=$((line_num + 1))
+    [[ -z "$line" ]] && continue
+
+    local type="${line%% *}"
+    case "$type" in
+      i)
+        if $in_state; then
+          echo "Error: malformed timeclock — unpaired entry at line $in_line_num" >&2
+          return 1
+        fi
+        in_date=$(echo "$line" | awk '{print $2}')
+        in_time=$(echo "$line" | awk '{print $3}')
+        account=$(echo "$line" | awk '{for(i=4;i<=NF;i++) printf "%s%s",$i,(i<NF?OFS:""); print ""}')
+        in_state=true
+        in_line_num=$line_num
+        ;;
+      o)
+        if ! $in_state; then
+          echo "Error: malformed timeclock — unpaired entry at line $line_num" >&2
+          return 1
+        fi
+        local out_date out_time
+        out_date=$(echo "$line" | awk '{print $2}')
+        out_time=$(echo "$line" | awk '{print $3}')
+        local out_ts="${out_date}T${out_time}"
+
+        in_state=false
+
+        # Skip if already exported
+        if [[ -n "$latest" && ! "$out_ts" > "$latest" ]]; then
+          continue
+        fi
+
+        # Extract Client:Project (first two colon-separated segments)
+        local client_project
+        client_project=$(echo "$account" | awk -F: '{print $1":"$2}')
+
+        # Resolve project name
+        local project
+        project=$(resolve_project_map "$client_project")
+        if [[ -z "$project" ]]; then
+          if [[ ! "$warned_projects" == *"|$client_project|"* ]]; then
+            echo "Warning: no project mapping for '$client_project', using as-is" >&2
+            warned_projects="${warned_projects}|$client_project|"
+          fi
+          project="$client_project"
+        fi
+
+        # Print header before first row
+        if ! $has_rows; then
+          echo '"date","start_time","end_time","project","description"'
+          has_rows=true
+        fi
+
+        echo "\"$in_date\",\"$in_time\",\"$out_time\",\"$project\",\"$description\""
+
+        # Track max clock-out timestamp
+        if [[ -z "$max_out_ts" || "$out_ts" > "$max_out_ts" ]]; then
+          max_out_ts="$out_ts"
+        fi
+        ;;
+    esac
+  done < "$TIMECLOCK_FILE"
+
+  # Handle trailing open session
+  if $in_state; then
+    local ticket="${account##*:}"
+    echo "Warning: open session ($ticket) skipped — stop it first" >&2
+  fi
+
+  if ! $has_rows; then
+    echo "No new entries since last export." >&2
+    return 0
+  fi
+
+  # Update .latest
+  echo "$max_out_ts" > "$LATEST_FILE"
+}
+
 main() {
   check_deps
   init_data_dir
@@ -200,6 +298,7 @@ main() {
     refresh) cmd_refresh "${2:-}" ;;
     fields)  cmd_fields "${2:-}" ;;
     completions) cmd_completions "${2:-}" ;;
+    csv)     cmd_csv ;;
     "")
       local ticket
       ticket=$(ticket_from_branch)

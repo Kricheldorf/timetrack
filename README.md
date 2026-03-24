@@ -47,6 +47,7 @@ track report 2026-03-19 # Show hledger report for a specific date
 track edit              # Open timeclock file in $EDITOR
 track refresh SHIP-123  # Re-fetch Jira metadata for a ticket
 track fields SHIP-123   # List Jira field names/IDs for a ticket
+track csv               # Export sessions as CSV for TeamTrace import
 track shipix            # Start tracking using an alias (see Aliases below)
 track completions fish  # Output fish shell completions to stdout
 track completions zsh   # Output zsh shell completions to stdout
@@ -65,6 +66,26 @@ TRACK_ALIASES="shipix=Shipix:General;quicargo=Quicargo:Maintenance;action=IDL Ac
 ```
 
 Then run `track shipix` to clock in as `Shipix:General:shipix`.
+
+## CSV Export
+
+Export completed sessions as CSV for import into TeamTrace.
+
+```sh
+track csv > march-time.csv
+```
+
+Output goes to stdout. Only sessions completed since the last export are included (tracked via `$DATA_DIR/.latest`). Delete `.latest` to re-export everything.
+
+Configure in `.env`:
+
+```bash
+TRACK_CSV_DESCRIPTION="Coding and PR/Docs review"
+TRACK_PROJECT_MAP="Shipix:General=Shipix - General;Shipix:Backend Dev=Shipix - General;Quicargo:Maintenance=Quicargo - Maintenance"
+```
+
+- `TRACK_CSV_DESCRIPTION` — description field for all exported rows
+- `TRACK_PROJECT_MAP` — maps `Client:Project` from timeclock to TeamTrace project names (semicolon-separated)
 
 ## Shell Completions
 
