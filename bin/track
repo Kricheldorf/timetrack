@@ -112,6 +112,22 @@ resolve_alias() {
   done
 }
 
+resolve_project_map() {
+  local key="$1"
+  local map="${TRACK_PROJECT_MAP:-}"
+  [[ -z "$map" ]] && return 0
+
+  local IFS=';'
+  for entry in $map; do
+    local k="${entry%%=*}"
+    local v="${entry#*=}"
+    if [[ "$k" == "$key" ]]; then
+      echo "$v"
+      return 0
+    fi
+  done
+}
+
 cmd_alias_start() {
   local alias_name="$1"
   local client_project

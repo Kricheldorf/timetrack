@@ -406,3 +406,26 @@ MOCK
   [ "$(cat "$called_with")" = "$TIMETRACK_DATA_DIR/time.timeclock" ]
   rm -rf "$mock_dir"
 }
+
+## resolve_project_map tests
+
+@test "resolve_project_map returns mapped value" {
+  load_track
+  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General;Quicargo:Maintenance=Quicargo - Maintenance"
+  result=$(resolve_project_map "Shipix:General")
+  [ "$result" = "Shipix - General" ]
+}
+
+@test "resolve_project_map returns empty for unknown key" {
+  load_track
+  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  result=$(resolve_project_map "Unknown:Project")
+  [ -z "$result" ]
+}
+
+@test "resolve_project_map returns empty when env var unset" {
+  load_track
+  unset TRACK_PROJECT_MAP 2>/dev/null || true
+  result=$(resolve_project_map "Shipix:General")
+  [ -z "$result" ]
+}
