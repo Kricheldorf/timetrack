@@ -130,6 +130,22 @@ resolve_project_map() {
   done
 }
 
+resolve_client_map() {
+  local key="$1"
+  local map="${TRACK_CLIENT_MAP:-}"
+  [[ -z "$map" ]] && return 0
+
+  local IFS=';'
+  for entry in $map; do
+    local k="${entry%%=*}"
+    local v="${entry#*=}"
+    if [[ "$k" == "$key" ]]; then
+      echo "$v"
+      return 0
+    fi
+  done
+}
+
 cmd_alias_start() {
   local alias_name="$1"
   local client_project
@@ -204,6 +220,7 @@ cmd_csv() {
   local in_state=false
   local in_line_num=0
   local warned_projects=""
+  local warned_clients=""
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     line_num=$((line_num + 1))
@@ -239,28 +256,40 @@ cmd_csv() {
           continue
         fi
 
-        # Extract Client:Project (first two colon-separated segments)
-        local client_project
-        client_project=$(echo "$account" | awk -F: '{print $1":"$2}')
+        # Extract client and project segments independently
+        local raw_client raw_project
+        raw_client=$(echo "$account" | awk -F: '{print $1}')
+        raw_project=$(echo "$account" | awk -F: '{print $2}')
 
         # Resolve project name
         local project
-        project=$(resolve_project_map "$client_project")
+        project=$(resolve_project_map "$raw_project")
         if [[ -z "$project" ]]; then
-          if [[ ! "$warned_projects" == *"|$client_project|"* ]]; then
-            echo "Warning: no project mapping for '$client_project', using as-is" >&2
-            warned_projects="${warned_projects}|$client_project|"
+          if [[ ! "$warned_projects" == *"|$raw_project|"* ]]; then
+            echo "Warning: no project mapping for '$raw_project', using as-is" >&2
+            warned_projects="${warned_projects}|$raw_project|"
           fi
-          project="$client_project"
+          project="$raw_project"
+        fi
+
+        # Resolve client name
+        local client
+        client=$(resolve_client_map "$raw_client")
+        if [[ -z "$client" ]]; then
+          if [[ ! "$warned_clients" == *"|$raw_client|"* ]]; then
+            echo "Warning: no client mapping for '$raw_client', using as-is" >&2
+            warned_clients="${warned_clients}|$raw_client|"
+          fi
+          client="$raw_client"
         fi
 
         # Print header before first row
         if ! $has_rows; then
-          echo '"date","start_time","end_time","project","description"'
+          echo '"date","start_time","end_time","client","project","description"'
           has_rows=true
         fi
 
-        echo "\"$in_date\",\"$in_time\",\"$out_time\",\"$project\",\"$description\""
+        echo "\"$in_date\",\"$in_time\",\"$out_time\",\"$client\",\"$project\",\"$description\""
 
         # Track max clock-out timestamp
         if [[ -z "$max_out_ts" || "$out_ts" > "$max_out_ts" ]]; then
