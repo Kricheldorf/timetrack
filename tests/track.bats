@@ -426,7 +426,7 @@ MOCK
 @test "resolve_project_map returns empty when env var unset" {
   load_track
   unset TRACK_PROJECT_MAP 2>/dev/null || true
-  result=$(resolve_project_map "Shipix:General")
+  result=$(resolve_project_map "General")
   [ -z "$result" ]
 }
 
@@ -449,7 +449,7 @@ MOCK
 @test "resolve_client_map returns empty when env var unset" {
   load_track
   unset TRACK_CLIENT_MAP 2>/dev/null || true
-  result=$(resolve_client_map "Shipix:General")
+  result=$(resolve_client_map "Shipix")
   [ -z "$result" ]
 }
 
@@ -553,6 +553,7 @@ MOCK
   export TRACK_CLIENT_MAP="Shipix=Shipix"
   run bash "$TRACK" csv
   [ "$status" -eq 0 ]
+  [[ "$output" == *"no project mapping for 'Project'"* ]]
   [[ "$output" == *'"Project"'* ]]
 }
 
