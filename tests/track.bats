@@ -411,15 +411,15 @@ MOCK
 
 @test "resolve_project_map returns mapped value" {
   load_track
-  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General;Quicargo:Maintenance=Quicargo - Maintenance"
-  result=$(resolve_project_map "Shipix:General")
+  export TRACK_PROJECT_MAP="General=Shipix - General;Maintenance=Quicargo - Maintenance"
+  result=$(resolve_project_map "General")
   [ "$result" = "Shipix - General" ]
 }
 
 @test "resolve_project_map returns empty for unknown key" {
   load_track
-  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
-  result=$(resolve_project_map "Unknown:Project")
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  result=$(resolve_project_map "Unknown Project")
   [ -z "$result" ]
 }
 
@@ -427,6 +427,29 @@ MOCK
   load_track
   unset TRACK_PROJECT_MAP 2>/dev/null || true
   result=$(resolve_project_map "Shipix:General")
+  [ -z "$result" ]
+}
+
+## resolve_client_map tests
+
+@test "resolve_client_map returns mapped value" {
+  load_track
+  export TRACK_CLIENT_MAP="Shipix=Shipix;Quicargo=Quicargo"
+  result=$(resolve_client_map "Shipix")
+  [ "$result" = "Shipix" ]
+}
+
+@test "resolve_client_map returns empty for unknown key" {
+  load_track
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
+  result=$(resolve_client_map "Unknown Client")
+  [ -z "$result" ]
+}
+
+@test "resolve_client_map returns empty when env var unset" {
+  load_track
+  unset TRACK_CLIENT_MAP 2>/dev/null || true
+  result=$(resolve_client_map "Shipix:General")
   [ -z "$result" ]
 }
 
@@ -439,18 +462,19 @@ MOCK
   echo "i 2026-03-19 11:00:00 Shipix:General:SHIP-456" >> "$TIMECLOCK_FILE"
   echo "o 2026-03-19 12:00:00" >> "$TIMECLOCK_FILE"
   export TRACK_CSV_DESCRIPTION="Coding and PR/Docs review"
-  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
   run bash "$TRACK" csv
   [ "$status" -eq 0 ]
   local header
   header=$(echo "$output" | head -1)
-  [ "$header" = '"date","start_time","end_time","project","description"' ]
+  [ "$header" = '"date","start_time","end_time","client","project","description"' ]
   local row1
   row1=$(echo "$output" | sed -n '2p')
-  [ "$row1" = '"2026-03-19","09:00:00","10:30:00","Shipix - General","Coding and PR/Docs review"' ]
+  [ "$row1" = '"2026-03-19","09:00:00","10:30:00","Shipix","Shipix - General","Coding and PR/Docs review"' ]
   local row2
   row2=$(echo "$output" | sed -n '3p')
-  [ "$row2" = '"2026-03-19","11:00:00","12:00:00","Shipix - General","Coding and PR/Docs review"' ]
+  [ "$row2" = '"2026-03-19","11:00:00","12:00:00","Shipix","Shipix - General","Coding and PR/Docs review"' ]
 }
 
 @test "track csv skips entries already exported via .latest" {
@@ -461,7 +485,8 @@ MOCK
   echo "o 2026-03-19 12:00:00" >> "$TIMECLOCK_FILE"
   echo "2026-03-19T10:30:00" > "$TIMETRACK_DATA_DIR/.latest"
   export TRACK_CSV_DESCRIPTION="Working"
-  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
   run bash "$TRACK" csv
   [ "$status" -eq 0 ]
   local lines
@@ -475,7 +500,8 @@ MOCK
   echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
   echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
   export TRACK_CSV_DESCRIPTION="Working"
-  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
   run bash "$TRACK" csv
   [ "$status" -eq 0 ]
   [ -f "$TIMETRACK_DATA_DIR/.latest" ]
@@ -499,10 +525,23 @@ MOCK
   echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
   echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
   export TRACK_CSV_DESCRIPTION="Working"
-  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
   run bash "$TRACK" csv
   [ "$status" -eq 0 ]
   [[ "$output" == *'"Shipix - General"'* ]]
+}
+
+@test "track csv resolves client names via TRACK_CLIENT_MAP" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Shipix:General:SHIP-123" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  export TRACK_CSV_DESCRIPTION="Working"
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"Shipix"'* ]]
 }
 
 @test "track csv warns and uses raw name for unmapped project" {
@@ -510,10 +549,23 @@ MOCK
   echo "i 2026-03-19 09:00:00 Unknown:Project:TICK-1" >> "$TIMECLOCK_FILE"
   echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
   export TRACK_CSV_DESCRIPTION="Working"
-  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
   run bash "$TRACK" csv
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"Unknown:Project"'* ]]
+  [[ "$output" == *'"Project"'* ]]
+}
+
+@test "track csv warns and uses raw name for unmapped client" {
+  load_track
+  echo "i 2026-03-19 09:00:00 Unknown:Project:TICK-1" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  export TRACK_CSV_DESCRIPTION="Working"
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no client mapping for 'Unknown'"* ]]
 }
 
 @test "track csv skips open session with warning" {
@@ -522,7 +574,8 @@ MOCK
   echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
   echo "i 2026-03-19 11:00:00 Shipix:General:SHIP-456" >> "$TIMECLOCK_FILE"
   export TRACK_CSV_DESCRIPTION="Working"
-  export TRACK_PROJECT_MAP="Shipix:General=Shipix - General"
+  export TRACK_PROJECT_MAP="General=Shipix - General"
+  export TRACK_CLIENT_MAP="Shipix=Shipix"
   run bash "$TRACK" csv
   [ "$status" -eq 0 ]
   # Should have header + 1 data row (the completed session)
@@ -551,4 +604,25 @@ MOCK
   run bash "$TRACK" completions fish
   [ "$status" -eq 0 ]
   [[ "$output" == *"csv"* ]]
+}
+
+@test "track csv maps Jira long-form names to TeamTrace short names" {
+  load_track
+  echo "i 2026-03-19 09:00:00 ID Logistics Parcel:ID Logstics Parcel MVP1:SA-1443" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 10:30:00" >> "$TIMECLOCK_FILE"
+  echo "i 2026-03-19 11:00:00 ID Logistics Action:ID Action MVP1:SA-1374" >> "$TIMECLOCK_FILE"
+  echo "o 2026-03-19 12:00:00" >> "$TIMECLOCK_FILE"
+  export TRACK_CSV_DESCRIPTION="Working"
+  export TRACK_PROJECT_MAP="ID Logstics Parcel MVP1=MVP 1;ID Action MVP1=MVP 1"
+  export TRACK_CLIENT_MAP="ID Logistics Parcel=IDL Parcel;ID Logistics Action=IDL Action"
+  run bash "$TRACK" csv
+  [ "$status" -eq 0 ]
+  local row1
+  row1=$(echo "$output" | sed -n '2p')
+  [[ "$row1" == *'"IDL Parcel"'* ]]
+  [[ "$row1" == *'"MVP 1"'* ]]
+  local row2
+  row2=$(echo "$output" | sed -n '3p')
+  [[ "$row2" == *'"IDL Action"'* ]]
+  [[ "$row2" == *'"MVP 1"'* ]]
 }
