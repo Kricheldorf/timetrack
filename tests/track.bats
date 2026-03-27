@@ -125,6 +125,15 @@ load_track() {
   [ "$open" = "Quicargo:Platform:QUIC-456" ]
 }
 
+@test "track TICKET with multi-word client/project preserves full names" {
+  echo '{"SA-1440":{"client":"ID Logistics Action","project":"ID Action MVP1"}}' > "$CACHE_FILE"
+  run bash "$TRACK" SA-1440
+  [ "$status" -eq 0 ]
+  load_track
+  open=$(get_open_session)
+  [ "$open" = "ID Logistics Action:ID Action MVP1:SA-1440" ]
+}
+
 @test "invalid ticket format exits 1" {
   run bash "$TRACK" not-a-ticket
   [ "$status" -eq 1 ]

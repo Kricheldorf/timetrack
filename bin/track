@@ -477,7 +477,7 @@ cmd_start() {
   info=$(get_ticket_info "$ticket")
   [[ -z "$info" ]] && { echo "Error: ticket '$ticket' not found in cache. Run after Jira env vars are set." >&2; exit 1; }
   local client project
-  read -r client project < <(echo "$info" | jq -r '[.client, .project] | @tsv')
+  IFS=$'\t' read -r client project < <(echo "$info" | jq -r '[.client, .project] | @tsv')
 
   local now
   now=$(date "+%Y-%m-%dT%H:%M:%S")
